@@ -64,7 +64,7 @@ jobs:
     timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ inputs.runtime-version }}
           cache: pip
@@ -99,7 +99,7 @@ jobs:
         run: bash --noprofile --norc -euo pipefail -c "$COMMAND"
       - name: Upload artifacts
         if: inputs.upload-artifacts
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: python-ci-artifacts
           path: ${{ inputs.working-directory }}/${{ inputs.artifact-path }}
