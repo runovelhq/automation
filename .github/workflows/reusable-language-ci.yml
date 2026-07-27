@@ -1,0 +1,151 @@
+name: Reusable language CI
+
+on:
+  workflow_call:
+    inputs:
+      stack:
+        type: string
+        required: true
+      working-directory:
+        type: string
+        default: .
+      runtime-version:
+        type: string
+        default: "3.12"
+      install-command:
+        type: string
+        default: ""
+      lint-command:
+        type: string
+        default: ""
+      test-command:
+        type: string
+        default: ""
+      coverage-command:
+        type: string
+        default: ""
+      upload-artifacts:
+        type: boolean
+        default: false
+      artifact-path:
+        type: string
+        default: coverage
+      shell-paths:
+        type: string
+        default: .
+      shell-syntax-check:
+        type: boolean
+        default: false
+      execute-project-commands:
+        type: boolean
+        default: false
+      timeout-minutes:
+        type: number
+        default: 20
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate stack contract
+        env:
+          STACK: ${{ inputs.stack }}
+        run: |
+          case "$STACK" in python|shell) ;; *) echo "::error::stack must be python or shell"; exit 1;; esac
+
+  python:
+    if: inputs.stack == 'python'
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ inputs.runtime-version }}
+          cache: pip
+          cache-dependency-path: |
+            ${{ inputs.working-directory }}/requirements*.txt
+            ${{ inputs.working-directory }}/pyproject.toml
+            ${{ inputs.working-directory }}/poetry.lock
+            ${{ inputs.working-directory }}/uv.lock
+      - name: Install dependencies
+        if: inputs.install-command != ''
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          COMMAND: ${{ inputs.install-command }}
+        run: bash --noprofile --norc -euo pipefail -c "$COMMAND"
+      - name: Lint
+        if: inputs.lint-command != ''
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          COMMAND: ${{ inputs.lint-command }}
+        run: bash --noprofile --norc -euo pipefail -c "$COMMAND"
+      - name: Test
+        if: inputs.test-command != ''
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          COMMAND: ${{ inputs.test-command }}
+        run: bash --noprofile --norc -euo pipefail -c "$COMMAND"
+      - name: Coverage
+        if: inputs.coverage-command != ''
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          COMMAND: ${{ inputs.coverage-command }}
+        run: bash --noprofile --norc -euo pipefail -c "$COMMAND"
+      - name: Upload artifacts
+        if: inputs.upload-artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: python-ci-artifacts
+          path: ${{ inputs.working-directory }}/${{ inputs.artifact-path }}
+          if-no-files-found: error
+          retention-days: 7
+
+  shell:
+    if: inputs.stack == 'shell'
+    needs: contract
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: ShellCheck and shfmt check
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          SHELL_PATHS: ${{ inputs.shell-paths }}
+        run: |
+          read -r -a roots <<< "$SHELL_PATHS"
+          mapfile -d '' files < <(find "${roots[@]}" -type f \( -name '*.sh' -o -name '*.bash' \) -print0)
+          if ((${#files[@]} == 0)); then echo "No shell files found"; exit 0; fi
+          shellcheck "${files[@]}"
+          shfmt -d "${files[@]}"
+      - name: Shell syntax validation
+        if: inputs.shell-syntax-check
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          SHELL_PATHS: ${{ inputs.shell-paths }}
+        run: |
+          read -r -a roots <<< "$SHELL_PATHS"
+          while IFS= read -r -d '' file; do bash -n "$file"; done < <(find "${roots[@]}" -type f \( -name '*.sh' -o -name '*.bash' \) -print0)
+      - name: Explicit project install command
+        if: inputs.execute-project-commands && inputs.install-command != ''
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          COMMAND: ${{ inputs.install-command }}
+        run: bash --noprofile --norc -euo pipefail -c "$COMMAND"
+      - name: Explicit project lint command
+        if: inputs.execute-project-commands && inputs.lint-command != ''
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          COMMAND: ${{ inputs.lint-command }}
+        run: bash --noprofile --norc -euo pipefail -c "$COMMAND"
+      - name: Explicit project test or Bats command
+        if: inputs.execute-project-commands && inputs.test-command != ''
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          COMMAND: ${{ inputs.test-command }}
+        run: bash --noprofile --norc -euo pipefail -c "$COMMAND"

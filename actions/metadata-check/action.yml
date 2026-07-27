@@ -1,0 +1,21 @@
+name: Repository metadata check
+description: Validate Runovel repository files, namespaces, SPDX metadata, and versioning documentation.
+inputs:
+  working-directory:
+    description: Repository directory to inspect
+    default: .
+  require-changelog:
+    description: Require CHANGELOG.md
+    default: "false"
+  require-contributing:
+    description: Require CONTRIBUTING.md
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        INPUT_REQUIRE_CHANGELOG: ${{ inputs.require-changelog }}
+        INPUT_REQUIRE_CONTRIBUTING: ${{ inputs.require-contributing }}
+      run: python3 "$GITHUB_ACTION_PATH/scripts/check.py"

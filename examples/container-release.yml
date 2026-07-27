@@ -1,0 +1,24 @@
+name: Container release
+on:
+  push:
+    tags: ["v*.*.*"]
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+jobs:
+  release:
+    uses: runovelhq/automation/.github/workflows/reusable-container-release.yml@v1
+    with:
+      image-name: example
+      dockerfile: Dockerfile
+      build-context: .
+      platforms: linux/amd64,linux/arm64
+      release-version: ${{ github.ref_name }}
+      dockerhub-enabled: false
+      smoke-test-command: example --version
+    # For Docker Hub mirroring, enable the input and map repository secrets:
+    # secrets:
+    #   dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+    #   dockerhub-token: ${{ secrets.DOCKERHUB_TOKEN }}

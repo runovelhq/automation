@@ -1,0 +1,11 @@
+name: Shell CI
+on: [pull_request]
+permissions:
+  contents: read
+jobs:
+  shell:
+    uses: runovelhq/automation/.github/workflows/reusable-language-ci.yml@v1
+    with:
+      stack: shell
+      shell-paths: scripts
+      shell-syntax-check: true
