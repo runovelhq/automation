@@ -1,0 +1,5 @@
+*                           @runovelhq/release-engineering
+/.github/workflows/         @runovelhq/release-engineering @runovelhq/security
+/actions/                   @runovelhq/release-engineering
+/docs/security.md           @runovelhq/security
+/SECURITY.md                @runovelhq/security

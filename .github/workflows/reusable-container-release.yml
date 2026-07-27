@@ -1,0 +1,207 @@
+name: Reusable container release
+
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        type: string
+        required: true
+      dockerfile:
+        type: string
+        default: Dockerfile
+      build-context:
+        type: string
+        default: .
+      platforms:
+        type: string
+        default: linux/amd64,linux/arm64
+      release-version:
+        type: string
+        required: true
+      dockerhub-enabled:
+        type: boolean
+        default: false
+      smoke-test-command:
+        type: string
+        default: ""
+    secrets:
+      dockerhub-username:
+        required: false
+      dockerhub-token:
+        required: false
+    outputs:
+      digest:
+        description: Published multi-platform image digest
+        value: ${{ jobs.release.outputs.digest }}
+      ghcr-image:
+        description: Canonical GHCR image name
+        value: ${{ jobs.release.outputs.ghcr-image }}
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      ghcr-image: ${{ steps.names.outputs.ghcr_image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Check out automation implementation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: runovelhq/automation
+          ref: ${{ github.workflow_sha }}
+          path: .runovel-automation
+      - id: version
+        uses: ./.runovel-automation/actions/version-check
+        with:
+          version: ${{ inputs.release-version }}
+      - name: Validate trusted release context
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          VERSION: ${{ inputs.release-version }}
+          IMAGE_NAME: ${{ inputs.image-name }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          BUILD_CONTEXT: ${{ inputs.build-context }}
+          PLATFORMS: ${{ inputs.platforms }}
+        run: |
+          [[ "$EVENT_NAME" != pull_request && "$EVENT_NAME" != pull_request_target ]]
+          [[ "$REF" == refs/tags/v* && "$REF_NAME" == "$VERSION" ]]
+          [[ "$IMAGE_NAME" =~ ^[a-z0-9]+([._-][a-z0-9]+)*$ ]]
+          [[ "$DOCKERFILE" =~ ^[A-Za-z0-9_./-]+$ && "$DOCKERFILE" != *..* ]]
+          [[ "$BUILD_CONTEXT" =~ ^[A-Za-z0-9_./-]+$ && "$BUILD_CONTEXT" != *..* ]]
+          [[ "$PLATFORMS" =~ ^linux/(amd64|arm64)(,linux/(amd64|arm64))*$ ]]
+      - id: names
+        name: Resolve immutable image names
+        env:
+          IMAGE_NAME: ${{ inputs.image-name }}
+          DOCKERHUB_ENABLED: ${{ inputs.dockerhub-enabled }}
+          DOCKERHUB_USERNAME: ${{ secrets.dockerhub-username }}
+          DOCKERHUB_TOKEN: ${{ secrets.dockerhub-token }}
+        run: |
+          ghcr_image="ghcr.io/runovelhq/${IMAGE_NAME}"
+          echo "ghcr_image=$ghcr_image" >> "$GITHUB_OUTPUT"
+          if [[ "$DOCKERHUB_ENABLED" == true ]]; then
+            [[ -n "$DOCKERHUB_USERNAME" ]] || { echo "::error::Docker Hub username is required"; exit 1; }
+            [[ -n "$DOCKERHUB_TOKEN" ]] || { echo "::error::Docker Hub token is required"; exit 1; }
+            [[ "$DOCKERHUB_USERNAME" =~ ^[a-z0-9][a-z0-9_-]*$ ]]
+            echo "dockerhub_image=${DOCKERHUB_USERNAME}/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Log in to Docker Hub
+        if: inputs.dockerhub-enabled
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.dockerhub-username }}
+          password: ${{ secrets.dockerhub-token }}
+      - id: tags
+        name: Generate approved tags
+        env:
+          GHCR_IMAGE: ${{ steps.names.outputs.ghcr_image }}
+          DOCKERHUB_IMAGE: ${{ steps.names.outputs.dockerhub_image }}
+          VERSION: ${{ inputs.release-version }}
+          NORMALIZED: ${{ steps.version.outputs.normalized-version }}
+          MAJOR: ${{ steps.version.outputs.major }}
+          MAJOR_MINOR: ${{ steps.version.outputs.major-minor }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          SHORT_SHA: ${{ github.sha }}
+        run: |
+          : "${SHORT_SHA:?missing commit SHA}"
+          short_sha="${SHORT_SHA:0:12}"
+          images=("$GHCR_IMAGE")
+          [[ -z "$DOCKERHUB_IMAGE" ]] || images+=("$DOCKERHUB_IMAGE")
+          : > "$RUNNER_TEMP/tags"
+          for image in "${images[@]}"; do
+            printf '%s:%s\n%s:sha-%s\n' "$image" "$NORMALIZED" "$image" "$short_sha" >> "$RUNNER_TEMP/tags"
+            if [[ "$PRERELEASE" == false ]]; then
+              printf '%s:%s\n%s:%s\n%s:latest\n' "$image" "$MAJOR_MINOR" "$image" "$MAJOR" "$image" >> "$RUNNER_TEMP/tags"
+            fi
+          done
+          { echo 'tags<<EOF'; cat "$RUNNER_TEMP/tags"; echo EOF; } >> "$GITHUB_OUTPUT"
+      - name: Build smoke-test image
+        if: inputs.smoke-test-command != ''
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ inputs.build-context }}
+          file: ${{ inputs.dockerfile }}
+          load: true
+          tags: runovel-smoke:${{ github.sha }}
+          cache-from: type=gha
+      - name: Run smoke test
+        if: inputs.smoke-test-command != ''
+        env:
+          IMAGE: runovel-smoke:${{ github.sha }}
+          SMOKE_TEST_COMMAND: ${{ inputs.smoke-test-command }}
+        run: |
+          [[ "$SMOKE_TEST_COMMAND" != *$'\n'* && "$SMOKE_TEST_COMMAND" != *$'\r'* ]]
+          docker run --rm "$IMAGE" sh -eu -c "$SMOKE_TEST_COMMAND"
+      - id: build
+        name: Build once and publish to configured registries
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: ${{ inputs.build-context }}
+          file: ${{ inputs.dockerfile }}
+          platforms: ${{ inputs.platforms }}
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+      - name: Generate SPDX JSON SBOM
+        uses: docker/scout-action@481412c8b8de36d0f79e85aa382c60397466feb6 # v1
+        with:
+          command: sbom
+          image: ${{ steps.names.outputs.ghcr_image }}@${{ steps.build.outputs.digest }}
+          format: spdx
+          output: sbom.spdx.json
+      - name: Scan published digest
+        uses: docker/scout-action@481412c8b8de36d0f79e85aa382c60397466feb6 # v1
+        with:
+          command: cves
+          image: ${{ steps.names.outputs.ghcr_image }}@${{ steps.build.outputs.digest }}
+          only-severities: critical,high
+          exit-code: true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sbom-spdx-json
+          path: sbom.spdx.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Generate GitHub provenance attestation
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-name: ${{ steps.names.outputs.ghcr_image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+      - name: Sign and verify immutable digest
+        env:
+          IMAGE: ${{ steps.names.outputs.ghcr_image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          cosign sign --yes "$IMAGE@$DIGEST"
+          cosign verify "$IMAGE@$DIGEST" --certificate-identity-regexp '^https://github.com/runovelhq/' --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+      - name: Release summary
+        env:
+          IMAGE: ${{ steps.names.outputs.ghcr_image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ inputs.release-version }}
+        run: |
+          # shellcheck disable=SC2016 # Markdown backticks are literal output.
+          printf '## Container release\n\n- Version: `%s`\n- Image: `%s@%s`\n- SBOM: SPDX JSON artifact\n- Provenance: BuildKit and GitHub attestation\n- Signature: Cosign keyless, verified\n' "$VERSION" "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"

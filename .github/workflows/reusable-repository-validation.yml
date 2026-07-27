@@ -1,0 +1,73 @@
+name: Reusable repository validation
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        type: string
+        default: .
+      require-changelog:
+        type: boolean
+        default: false
+      require-contributing:
+        type: boolean
+        default: true
+      enable-shellcheck:
+        type: boolean
+        default: true
+      enable-link-check:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Check out automation implementation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: runovelhq/automation
+          ref: ${{ github.workflow_sha }}
+          path: .runovel-automation
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: .runovel-automation/requirements-ci.txt
+      - name: Install syntax validator
+        run: "python -m pip install --only-binary=:all: -r .runovel-automation/requirements-ci.txt"
+      - name: Validate YAML, JSON, Markdown, and whitespace
+        working-directory: ${{ inputs.working-directory }}
+        run: python "$GITHUB_WORKSPACE/.runovel-automation/scripts/validate-repository.py"
+      - name: Validate repository metadata
+        uses: ./.runovel-automation/actions/metadata-check
+        with:
+          working-directory: ${{ inputs.working-directory }}
+          require-changelog: ${{ inputs.require-changelog }}
+          require-contributing: ${{ inputs.require-contributing }}
+      - name: Verify external Action pins
+        working-directory: ${{ inputs.working-directory }}
+        run: python "$GITHUB_WORKSPACE/.runovel-automation/scripts/verify-action-pins.py" .github
+      - name: Run actionlint
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          GOBIN: ${{ runner.temp }}/actionlint-bin
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          "$GOBIN/actionlint"
+      - name: Run ShellCheck when shell files exist
+        if: inputs.enable-shellcheck
+        working-directory: ${{ inputs.working-directory }}
+        shell: bash
+        run: |
+          mapfile -d '' files < <(find . -type f \( -name '*.sh' -o -name '*.bash' \) -not -path './.git/*' -print0)
+          if ((${#files[@]})); then shellcheck "${files[@]}"; else echo "No shell files found"; fi
+      - name: Check local Markdown links
+        if: inputs.enable-link-check
+        working-directory: ${{ inputs.working-directory }}
+        run: python "$GITHUB_WORKSPACE/.runovel-automation/scripts/check-local-links.py"

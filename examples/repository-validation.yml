@@ -1,0 +1,9 @@
+name: Repository validation
+on: [pull_request]
+permissions:
+  contents: read
+jobs:
+  validate:
+    uses: runovelhq/automation/.github/workflows/reusable-repository-validation.yml@v1
+    with:
+      require-contributing: true

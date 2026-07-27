@@ -1,0 +1,68 @@
+name: Self test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+      - run: "python -m pip install --only-binary=:all: -r requirements-ci.txt"
+      - run: python scripts/validate-repository.py
+      - run: python scripts/check-local-links.py
+      - name: Run actionlint
+        env:
+          GOBIN: ${{ runner.temp }}/actionlint-bin
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          "$GOBIN/actionlint"
+      - name: Check shell files
+        run: |
+          mapfile -d '' files < <(find . -type f \( -name '*.sh' -o -name '*.bash' \) -not -path './.git/*' -print0)
+          if ((${#files[@]})); then shellcheck "${files[@]}"; shfmt -d "${files[@]}"; else echo "No shell files found"; fi
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - run: python -m unittest discover -s tests -v
+      - name: Exercise metadata Action implementation
+        env:
+          INPUT_WORKING_DIRECTORY: .
+          INPUT_REQUIRE_CHANGELOG: "true"
+          INPUT_REQUIRE_CONTRIBUTING: "true"
+        run: python actions/metadata-check/scripts/check.py
+      - name: Exercise version Action implementation
+        env:
+          INPUT_VERSION: v1.0.0-rc.1
+        run: python actions/version-check/scripts/check.py
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: python scripts/verify-action-pins.py .github examples
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - run: "python -m pip install --only-binary=:all: -r requirements-ci.txt"
+      - name: Review workflow triggers, secrets, and permissions
+        run: python scripts/security-review.py

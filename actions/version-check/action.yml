@@ -1,0 +1,27 @@
+name: Version check
+description: Validate and normalize a semantic release version.
+inputs:
+  version:
+    description: Version in vMAJOR.MINOR.PATCH form
+    required: true
+outputs:
+  normalized-version:
+    description: Version without the leading v
+    value: ${{ steps.version.outputs.normalized_version }}
+  major:
+    description: Major version
+    value: ${{ steps.version.outputs.major }}
+  major-minor:
+    description: Major and minor version
+    value: ${{ steps.version.outputs.major_minor }}
+  prerelease:
+    description: Whether this is a pre-release
+    value: ${{ steps.version.outputs.prerelease }}
+runs:
+  using: composite
+  steps:
+    - id: version
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+      run: python3 "$GITHUB_ACTION_PATH/scripts/check.py"

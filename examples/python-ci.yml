@@ -1,0 +1,13 @@
+name: Python CI
+on: [pull_request]
+permissions:
+  contents: read
+jobs:
+  python:
+    uses: runovelhq/automation/.github/workflows/reusable-language-ci.yml@v1
+    with:
+      stack: python
+      runtime-version: "3.12"
+      install-command: python -m pip install -r requirements.txt
+      lint-command: python -m ruff check .
+      test-command: python -m pytest
